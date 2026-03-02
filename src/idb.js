@@ -45,6 +45,14 @@ export async function idbDeletePrefix(db, prefix) {
   });
 }
 
+export async function idbClearAll(db) {
+  return new Promise((res, rej) => {
+    const tx = db.transaction(IDB_STORE, "readwrite");
+    tx.objectStore(IDB_STORE).clear();
+    tx.oncomplete = res; tx.onerror = e => rej(e.target.error);
+  });
+}
+
 export async function idbLoadAll(db) {
   return new Promise((res, rej) => {
     const tx  = db.transaction(IDB_STORE, "readonly");

@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { REGISTRY, BUILTINS, HELP_TOPICS } from "./commands/registry.js";
 import { mathEval, fmtNum } from "./commands/_utils/math.js";
-import { idbOpen, idbPut, idbDelete, idbDeletePrefix, idbLoadAll } from "./idb.js";
+import { idbOpen, idbPut, idbDelete, idbDeletePrefix, idbLoadAll, idbClearAll } from "./idb.js";
 
 // ══════════════════════════════════════════════════════════════════════════════
 // VIRTUAL FILE SYSTEM
@@ -28,6 +28,13 @@ class VFS {
     this._wf("/home/user/.profile", "# MASH profile\nexport PATH=/bin:/usr/bin\nexport EDITOR=nano\nexport TERM=xterm-256color\n");
     this._wf("/home/user/.bashrc", "# MASH interactive shell config\nalias ll='ls -la'\nalias la='ls -a'\nalias ..='cd ..'\nalias ...='cd ../..'\n");
     this._wf("/var/log/shell.log", "");
+
+    // Populate /bin and /usr/bin with stub files (overwritable by user)
+    const BIN = ["echo","cat","ls","pwd","cd","mkdir","rmdir","rm","cp","mv","touch","find","du","df","ln","chmod","chown","date","sleep","true","false","yes","uname","hostname","ps","test","export","unset","read","alias","unalias","which","type","command","history","jobs","kill","clear","exit","motd","download","write","append","nano","vi","vim","wipe-fs"];
+    const USR_BIN = ["grep","sed","awk","sort","uniq","cut","tr","wc","head","tail","printf","tee","seq","nl","rev","fold","od","cksum","xargs","bc","expr","tac","shuf","base64","md5sum","sha256sum","diff","paste","comm","expand","unexpand","stat","readlink","realpath","mktemp","timeout","nproc","uptime","free","whoami","id","basename","dirname","env","printenv"];
+    for (const cmd of BIN)     this._wf(`/bin/${cmd}`,     `# built-in: ${cmd}\n`);
+    for (const cmd of USR_BIN) this._wf(`/usr/bin/${cmd}`, `# built-in: ${cmd}\n`);
+    this._wf("/usr/bin/math", "# built-in: math\n");
   }
 
   _persist(path) { if (!this._db) return; const n = this._t[path]; if (n) idbPut(this._db, path, n).catch(()=>{}); else idbDelete(this._db, path).catch(()=>{}); }
@@ -267,6 +274,28 @@ function execCmd(cmd, args, stdin, vfs, sh) {
     if (args.length && HELP_TOPICS[args[0]]) return { output: HELP_TOPICS[args[0]], exitCode: 0 };
     if (args.length) return { output: `No manual entry for ${args[0]}\nTry 'help' for a list of commands.\n`, exitCode: 1 };
     return { output: MAIN_HELP, exitCode: 0 };
+  }
+
+  // VFS script override: if /bin/cmd or /usr/bin/cmd exists and isn't a stub, execute it
+  const vfsBinPaths = [`/bin/${cmd}`, `/usr/bin/${cmd}`];
+  for (const bp of vfsBinPaths) {
+    if (vfs.isFile(bp)) {
+      const script = vfs.read(bp) ?? "";
+      if (script && !script.trimStart().startsWith("# built-in:")) {
+        // run each line as a shell command, passing stdin and args via $@ / $*
+        const prevArgs = sh.env["@"];
+        sh.env["@"] = args.join(" ");
+        const parts = splitBySemicolon(script.replace(/\n/g, ";"));
+        let lastRes = { output: "", exitCode: 0 };
+        for (const part of parts) {
+          const t = part.trim(); if (!t || t.startsWith("#")) continue;
+          const toks = tokenize(t); if (!toks.length) continue;
+          lastRes = runPipeline(parsePipeline(toks), vfs, sh);
+        }
+        if (prevArgs === undefined) delete sh.env["@"]; else sh.env["@"] = prevArgs;
+        return lastRes;
+      }
+    }
   }
 
   const entry = REGISTRY[cmd];
@@ -668,8 +697,9 @@ export default function App() {
       }
       const s = fmtNum(val);
       setAns(s); ansR.current = s;
-      const existing = vfs.current.read("/home/user/ANS") || "";
-      vfs.current.write("/home/user/ANS", existing + s + "\n");
+      vfs.current.write("/home/user/ANS", s + "\n");
+      const prevHist = vfs.current.read("/home/user/HISTORY") || "";
+      vfs.current.write("/home/user/HISTORY", prevHist + `${e} = ${s}\n`);
       setCalcHist(h => [{ expr: e, result: s }, ...h].slice(0, 50));
       setDisplay(s); setExpr(s); setIsResult(true); setPreview(null);
       saveMeta(s);
@@ -706,10 +736,7 @@ export default function App() {
       if (res.output.startsWith("__WIPEFS__")) {
         (async () => {
           try {
-            if (vfs.current._db) {
-              await idbDeletePrefix(vfs.current._db, "/");
-              await idbDelete(vfs.current._db, "__meta__");
-            }
+            if (vfs.current._db) await idbClearAll(vfs.current._db);
           } catch(e) { console.warn("IDB wipe failed", e); }
           const freshVfs = new VFS(); freshVfs._db = vfs.current._db; vfs.current = freshVfs;
           sh.current = { cwd:"/home/user", env:{ HOME:"/home/user", USER:"user", PATH:"/bin:/usr/bin", SHELL:"/bin/mash", TERM:"xterm-256color", "?":"0" }, aliases:{ ll:"ls -la", la:"ls -a" }, history:[] };
@@ -837,7 +864,7 @@ export default function App() {
               fontSize:"9px", color: histOpen ? "#7cdeff" : "#252540",
               background:"transparent", border:"none", cursor:"pointer", padding:"2px 4px",
               fontFamily:"'JetBrains Mono', monospace",
-            }} title="History">⏱ {calcHist.length > 0 ? calcHist.length : ""}</button>
+            }} title="History">HIST {calcHist.length > 0 ? calcHist.length : ""}</button>
           </div>
 
           {/* expression */}
@@ -890,7 +917,6 @@ export default function App() {
         >{cliOpen?"▲  CLOSE TERMINAL":"▼  OPEN TERMINAL"}</button>
       </div>
 
-      {/* ── HISTORY DRAWER ── */}
       {histOpen && (
         <div style={{ position:"fixed", top:0, right:0, bottom:0, width:"260px", background:"#07070d", borderLeft:"1px solid #1a1a28", zIndex:20, display:"flex", flexDirection:"column", transform:cliOpen?"translateY(-100vh)":"none", transition:"transform 0.45s cubic-bezier(0.4,0,0.2,1)" }}>
           <div style={{ padding:"14px 16px 10px", borderBottom:"1px solid #131320", display:"flex", justifyContent:"space-between", alignItems:"center", flexShrink:0 }}>
@@ -898,20 +924,30 @@ export default function App() {
             <button onClick={() => setHistOpen(false)} style={{ background:"none", border:"none", color:"#2a2a48", cursor:"pointer", fontSize:"14px", padding:"2px 6px", fontFamily:"monospace" }}>✕</button>
           </div>
           <div style={{ flex:1, overflow:"auto", padding:"8px" }}>
-            {calcHist.length === 0 && <div style={{ color:"#1e1e38", fontSize:"10px", textAlign:"center", marginTop:"40px", letterSpacing:"1px" }}>no history yet</div>}
-            {calcHist.map((h, i) => (
-              <div key={i} onClick={() => { setAns(h.result); ansR.current = h.result; setHistOpen(false); }}
-                style={{ padding:"8px 10px", marginBottom:"4px", borderRadius:"7px", border:"1px solid #181826", cursor:"pointer", transition:"border-color 0.15s" }}
-                onMouseEnter={e => e.currentTarget.style.borderColor="#282848"}
-                onMouseLeave={e => e.currentTarget.style.borderColor="#181826"}
-              >
-                <div style={{ color:"#2c2c50", fontSize:"9px", marginBottom:"2px", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{h.expr}</div>
-                <div style={{ color:"#a0a0d0", fontSize:"13px", fontWeight:"300", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{h.result}</div>
-              </div>
-            ))}
+            {(() => {
+              // Read from ~/HISTORY file; fall back to calcHist state
+              const raw = vfs.current.read("/home/user/HISTORY") || "";
+              const lines = raw.split("\n").filter(l => l.includes(" = ")).reverse();
+              if (lines.length === 0) return <div style={{ color:"#1e1e38", fontSize:"10px", textAlign:"center", marginTop:"40px", letterSpacing:"1px" }}>no history yet</div>;
+              return lines.map((line, i) => {
+                const eqIdx = line.lastIndexOf(" = ");
+                const ex = eqIdx >= 0 ? line.slice(0, eqIdx) : line;
+                const res = eqIdx >= 0 ? line.slice(eqIdx + 3) : "";
+                return (
+                  <div key={i} onClick={() => { setAns(res); ansR.current = res; setHistOpen(false); }}
+                    style={{ padding:"8px 10px", marginBottom:"4px", borderRadius:"7px", border:"1px solid #181826", cursor:"pointer", transition:"border-color 0.15s" }}
+                    onMouseEnter={e => e.currentTarget.style.borderColor="#282848"}
+                    onMouseLeave={e => e.currentTarget.style.borderColor="#181826"}
+                  >
+                    <div style={{ color:"#2c2c50", fontSize:"9px", marginBottom:"2px", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{ex}</div>
+                    <div style={{ color:"#a0a0d0", fontSize:"13px", fontWeight:"300", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{res}</div>
+                  </div>
+                );
+              });
+            })()}
           </div>
           <div style={{ padding:"10px 12px", borderTop:"1px solid #131320", flexShrink:0 }}>
-            <button onClick={() => setCalcHist([])} style={{ width:"100%", padding:"6px", background:"transparent", border:"1px solid #1e1e28", color:"#2a2a48", fontSize:"9px", borderRadius:"6px", cursor:"pointer", fontFamily:"'JetBrains Mono', monospace", letterSpacing:"2px", transition:"all 0.2s" }}
+            <button onClick={() => { vfs.current.write("/home/user/HISTORY", ""); setCalcHist([]); }} style={{ width:"100%", padding:"6px", background:"transparent", border:"1px solid #1e1e28", color:"#2a2a48", fontSize:"9px", borderRadius:"6px", cursor:"pointer", fontFamily:"'JetBrains Mono', monospace", letterSpacing:"2px", transition:"all 0.2s" }}
               onMouseEnter={e=>{e.currentTarget.style.borderColor="#401a1a";e.currentTarget.style.color="#ff8c8c";}}
               onMouseLeave={e=>{e.currentTarget.style.borderColor="#1e1e28";e.currentTarget.style.color="#2a2a48";}}>
               CLEAR HISTORY
