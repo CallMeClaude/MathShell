@@ -1,7 +1,64 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { REGISTRY, BUILTINS, HELP_TOPICS } from "./commands/registry.js";
-import { mathEval, fmtNum } from "./commands/_utils/math.js";
+import { CMD_SOURCES } from "./commands/sources.js";
+import { mathEval, fmtNum, factorial, nCr, nPr } from "./commands/_utils/math.js";
+import { MONTHS, fmtDate, fmtSize, fmtLong } from "./commands/_utils/format.js";
 import { idbOpen, idbPut, idbDelete, idbDeletePrefix, idbLoadAll, idbClearAll } from "./idb.js";
+
+// ══════════════════════════════════════════════════════════════════════════════
+// CMD SOURCE EVALUATOR
+// Reads a command JS file from the VFS (or a raw string), strips ES-module
+// syntax, injects utility deps, and calls the default-exported function.
+// Falls back to shell-script execution if no JS function is found.
+// ══════════════════════════════════════════════════════════════════════════════
+
+// All utility values that command files may reference after import-stripping
+const _EVAL_DEPS = {
+  mathEval, fmtNum, factorial, nCr, nPr,
+  MONTHS, fmtDate, fmtSize, fmtLong,
+};
+const _DEP_NAMES = Object.keys(_EVAL_DEPS);
+const _DEP_VALS  = Object.values(_EVAL_DEPS);
+
+function evalCmdSource(source, args, ctx) {
+  // 1. Strip all ES import lines (single and multi-line)
+  let src = source.replace(/^import\s[\s\S]*?from\s+['"][^'"]+['"]\s*;?\s*$/gm, '');
+  // 2. Strip export keywords
+  src = src.replace(/\bexport\s+default\s+/g, '').replace(/\bexport\s+/g, '');
+
+  // 3. Find the primary function name (default export after stripping)
+  const fnMatch = src.match(/^\s*(?:async\s+)?function\s+(\w[\w$]*)\s*\(/m);
+  if (!fnMatch) return null; // Not a JS function file
+
+  const fnName  = fnMatch[1];
+  const wrapped = `${src}\nreturn ${fnName};`;
+  try {
+    const fn = new Function(..._DEP_NAMES, wrapped)(..._DEP_VALS);
+    return fn(args, ctx);
+  } catch(e) {
+    return { output: `${fnName}: runtime error: ${e.message}\n`, exitCode: 1 };
+  }
+}
+
+// Write all CMD_SOURCES into the VFS. Returns total count for progress tracking.
+function populateVFSCommands(vfs) {
+  for (const [path, src] of Object.entries(CMD_SOURCES)) {
+    vfs._wf(path, src);
+  }
+  return Object.keys(CMD_SOURCES).length;
+}
+
+// Async version: yields control between writes so progress state can render
+async function populateVFSCommandsAsync(vfs, onProgress) {
+  const entries = Object.entries(CMD_SOURCES);
+  const total   = entries.length;
+  for (let i = 0; i < entries.length; i++) {
+    const [path, src] = entries[i];
+    vfs._wf(path, src);
+    onProgress(Math.round(((i + 1) / total) * 100));
+    if (i % 5 === 0) await new Promise(r => setTimeout(r, 0)); // yield to React
+  }
+}
 
 // ══════════════════════════════════════════════════════════════════════════════
 // VIRTUAL FILE SYSTEM
@@ -29,12 +86,8 @@ class VFS {
     this._wf("/home/user/.bashrc", "# MASH interactive shell config\nalias ll='ls -la'\nalias la='ls -a'\nalias ..='cd ..'\nalias ...='cd ../..'\n");
     this._wf("/var/log/shell.log", "");
 
-    // Populate /bin and /usr/bin with stub files (overwritable by user)
-    const BIN = ["echo","cat","ls","pwd","cd","mkdir","rmdir","rm","cp","mv","touch","find","du","df","ln","chmod","chown","date","sleep","true","false","yes","uname","hostname","ps","test","export","unset","read","alias","unalias","which","type","command","history","jobs","kill","clear","exit","motd","download","write","append","nano","vi","vim","wipe-fs"];
-    const USR_BIN = ["grep","sed","awk","sort","uniq","cut","tr","wc","head","tail","printf","tee","seq","nl","rev","fold","od","cksum","xargs","bc","expr","tac","shuf","base64","md5sum","sha256sum","diff","paste","comm","expand","unexpand","stat","readlink","realpath","mktemp","timeout","nproc","uptime","free","whoami","id","basename","dirname","env","printenv"];
-    for (const cmd of BIN)     this._wf(`/bin/${cmd}`,     `# built-in: ${cmd}\n`);
-    for (const cmd of USR_BIN) this._wf(`/usr/bin/${cmd}`, `# built-in: ${cmd}\n`);
-    this._wf("/usr/bin/math", "# built-in: math\n");
+    // Populate /bin and /usr/bin with actual JS source from the bundled CMD_SOURCES
+    populateVFSCommands(this);
   }
 
   _persist(path) { if (!this._db) return; const n = this._t[path]; if (n) idbPut(this._db, path, n).catch(()=>{}); else idbDelete(this._db, path).catch(()=>{}); }
@@ -276,28 +329,36 @@ function execCmd(cmd, args, stdin, vfs, sh) {
     return { output: MAIN_HELP, exitCode: 0 };
   }
 
-  // VFS script override: if /bin/cmd or /usr/bin/cmd exists and isn't a stub, execute it
+  // VFS-first execution: read /bin/cmd or /usr/bin/cmd and eval/run it
   const vfsBinPaths = [`/bin/${cmd}`, `/usr/bin/${cmd}`];
   for (const bp of vfsBinPaths) {
     if (vfs.isFile(bp)) {
       const script = vfs.read(bp) ?? "";
-      if (script && !script.trimStart().startsWith("# built-in:")) {
-        // run each line as a shell command, passing stdin and args via $@ / $*
-        const prevArgs = sh.env["@"];
-        sh.env["@"] = args.join(" ");
-        const parts = splitBySemicolon(script.replace(/\n/g, ";"));
-        let lastRes = { output: "", exitCode: 0 };
-        for (const part of parts) {
-          const t = part.trim(); if (!t || t.startsWith("#")) continue;
-          const toks = tokenize(t); if (!toks.length) continue;
-          lastRes = runPipeline(parsePipeline(toks), vfs, sh);
-        }
-        if (prevArgs === undefined) delete sh.env["@"]; else sh.env["@"] = prevArgs;
-        return lastRes;
+      if (!script.trim()) continue;
+
+      // Build the full ctx that command JS files expect
+      const ctx = { stdin, vfs, sh, env: sh.env, execCmd, runPipeline, parsePipeline, tokenize, registry: REGISTRY };
+
+      // Try eval as JS (has a function definition)
+      const jsResult = evalCmdSource(script, args, ctx);
+      if (jsResult !== null) return jsResult;
+
+      // Otherwise treat as a shell script: run each line
+      const prevAt = sh.env["@"];
+      sh.env["@"] = args.join(" ");
+      const parts = script.split("\n").filter(l => l.trim() && !l.trim().startsWith("#"));
+      let lastRes = { output: "", exitCode: 0 };
+      for (const part of parts) {
+        const t = part.trim(); if (!t) continue;
+        const toks = tokenize(t); if (!toks.length) continue;
+        lastRes = runPipeline(parsePipeline(toks), vfs, sh);
       }
+      if (prevAt === undefined) delete sh.env["@"]; else sh.env["@"] = prevAt;
+      return lastRes;
     }
   }
 
+  // Fallback to registry (for aliases, help, internals not in VFS)
   const entry = REGISTRY[cmd];
   if (entry) {
     const ctx = { stdin, vfs, sh, env: sh.env, execCmd, runPipeline, parsePipeline, tokenize, registry: REGISTRY };
@@ -501,6 +562,7 @@ export default function App() {
   const [cmdIdx, setCmdIdx]     = useState(-1);
   const [savedFlash, setSavedFlash] = useState(false);
   const [cwd, setCwd]           = useState("/home/user");
+  const [wipeProgress, setWipeProgress] = useState(null); // null | 0-100
 
   // ── calculator core state
   const [expr, setExpr]         = useState("");
@@ -735,13 +797,35 @@ export default function App() {
       if (res.output.startsWith("__CLEAR__")) { setLines([{ type:"sys", text:"Terminal cleared." }]); setInp(""); return; }
       if (res.output.startsWith("__WIPEFS__")) {
         (async () => {
+          setWipeProgress(0);
+          try { if (vfs.current._db) await idbClearAll(vfs.current._db); } catch(e) { console.warn("IDB wipe failed", e); }
+          const freshVfs = new VFS();
+          // VFS constructor calls populateVFSCommands (sync), so commands are in;
+          // now re-persist everything to IDB with progress reporting
+          freshVfs._db = vfs.current._db;
+          vfs.current = freshVfs;
+          // persist all VFS entries to IDB with progress
+          const allPaths = Object.keys(freshVfs._t);
+          const total = allPaths.length;
+          for (let i = 0; i < allPaths.length; i++) {
+            const p = allPaths[i];
+            const node = freshVfs._t[p];
+            if (freshVfs._db && node) {
+              try { await idbPut(freshVfs._db, p, node); } catch {}
+            }
+            if (i % 3 === 0) {
+              setWipeProgress(Math.round(((i + 1) / total) * 100));
+              await new Promise(r => setTimeout(r, 0));
+            }
+          }
+          // persist __meta__ too
           try {
-            if (vfs.current._db) await idbClearAll(vfs.current._db);
-          } catch(e) { console.warn("IDB wipe failed", e); }
-          const freshVfs = new VFS(); freshVfs._db = vfs.current._db; vfs.current = freshVfs;
+            if (freshVfs._db) await idbPut(freshVfs._db, "__meta__", { type:"meta", cwd:"/home/user", env:{HOME:"/home/user",USER:"user",PATH:"/bin:/usr/bin",SHELL:"/bin/mash",TERM:"xterm-256color","?":"0"}, aliases:{ll:"ls -la",la:"ls -a"}, history:[], ans:"0", mtime:Date.now(), size:0 });
+          } catch {}
           sh.current = { cwd:"/home/user", env:{ HOME:"/home/user", USER:"user", PATH:"/bin:/usr/bin", SHELL:"/bin/mash", TERM:"xterm-256color", "?":"0" }, aliases:{ ll:"ls -la", la:"ls -a" }, history:[] };
           setAns("0"); setCmdHist([]); setCwd("/home/user");
-          setLines([{ type:"sys", text:"Filesystem wiped. All persisted data cleared." }]); setInp("");
+          setWipeProgress(null);
+          setLines([{ type:"sys", text:`Filesystem wiped and rebuilt. ${total} files populated.` }]); setInp("");
         })();
         return;
       }
@@ -979,6 +1063,18 @@ export default function App() {
           />
         </div>
       </div>
+
+      {/* ── WIPE PROGRESS OVERLAY ── */}
+      {wipeProgress !== null && (
+        <div style={{ position:"fixed", inset:0, background:"rgba(5,5,8,0.93)", zIndex:100, display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", gap:"20px" }}>
+          <div style={{ color:"#ff8c8c", fontSize:"10px", letterSpacing:"4px", fontFamily:"'JetBrains Mono', monospace" }}>WIPING FILESYSTEM</div>
+          <div style={{ width:"280px", height:"4px", background:"#1a1a28", borderRadius:"2px", overflow:"hidden" }}>
+            <div style={{ height:"100%", width:`${wipeProgress}%`, background:"linear-gradient(90deg, #ff8c8c, #ffc460)", borderRadius:"2px", transition:"width 0.1s linear" }} />
+          </div>
+          <div style={{ color:"#2a2a48", fontSize:"9px", letterSpacing:"2px", fontFamily:"'JetBrains Mono', monospace" }}>{wipeProgress}%</div>
+          <div style={{ color:"#1e1e38", fontSize:"9px", letterSpacing:"1px", fontFamily:"'JetBrains Mono', monospace" }}>rebuilding /bin and /usr/bin from source…</div>
+        </div>
+      )}
     </div>
   );
 }
