@@ -252,33 +252,27 @@ function runPipeline(segs, vfs, sh) {
 
 function execCmd(cmd, args, stdin, vfs, sh) {
   if (!cmd) return { output: "", exitCode: 0 };
-  const norm = p => vfs.resolve(p, sh.cwd);
 
-  // VAR=value assignment
   if (/^[a-zA-Z_][a-zA-Z0-9_]*=/.test(cmd) && args.length === 0) {
     const eq = cmd.indexOf("="); sh.env[cmd.slice(0, eq)] = cmd.slice(eq + 1);
     return { output: "", exitCode: 0 };
   }
 
-  // Alias expansion (before registry lookup)
   if (sh.aliases[cmd]) {
     const expanded = sh.aliases[cmd] + (args.length ? " " + args.join(" ") : "");
     return runPipeline(parsePipeline(tokenize(expanded)), vfs, sh);
   }
 
-  // help / man — special-cased here to access MAIN_HELP and HELP_TOPICS
   if (cmd === "help" || cmd === "man") {
     if (args.length && HELP_TOPICS[args[0]]) return { output: HELP_TOPICS[args[0]], exitCode: 0 };
     if (args.length) return { output: `No manual entry for ${args[0]}\nTry 'help' for a list of commands.\n`, exitCode: 1 };
     return { output: MAIN_HELP, exitCode: 0 };
   }
 
-  // Registry dispatch
   const entry = REGISTRY[cmd];
   if (entry) {
     const ctx = { stdin, vfs, sh, env: sh.env, execCmd, runPipeline, parsePipeline, tokenize, registry: REGISTRY };
     try {
-      // Handle test/[ bracket alias
       const cmdArgs = cmd === "[" ? args.slice(0, -1) : args;
       return entry.fn(cmdArgs, ctx);
     } catch(e) {
@@ -319,52 +313,158 @@ function executeInput(rawInput, vfs, sh) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// REACT APP
+// CALCULATOR — COLORS & KEY COMPONENT
 // ══════════════════════════════════════════════════════════════════════════════
 
-const KEY_COLORS = {
-  num:   { bg: "#111111", fg: "#e8e0d8", border: "#222" },
-  op:    { bg: "#0a1a0a", fg: "#5fdd7f", border: "#1a3a1a" },
-  fn:    { bg: "#0d0d1e", fg: "#a09cf0", border: "#1a1a38" },
-  clear: { bg: "#1c0a0a", fg: "#ff6b6b", border: "#3a1a1a" },
-  eq:    { bg: "#0a1f0a", fg: "#4dff7a", border: "#1a4a1a" },
-  ans:   { bg: "#081520", fg: "#5cc8f5", border: "#1a3a50" },
-  del:   { bg: "#191008", fg: "#f5a840", border: "#352010" },
+const C = {
+  num:   { bg: "#16161e", fg: "#f4ece4", border: "#2c2c3a" },
+  op:    { bg: "#0e2416", fg: "#74f096", border: "#1e4a2c" },
+  fn:    { bg: "#131230", fg: "#c4beff", border: "#222050" },
+  clear: { bg: "#261212", fg: "#ff8c8c", border: "#461e1e" },
+  eq:    { bg: "#102a12", fg: "#6aff8c", border: "#1e5020" },
+  ans:   { bg: "#0e1e30", fg: "#7cdeff", border: "#1c405e" },
+  del:   { bg: "#221408", fg: "#ffc460", border: "#402810" },
+  mem:   { bg: "#1c1032", fg: "#d896ff", border: "#341a56" },
+  hex:   { bg: "#1e0e28", fg: "#ff9ee0", border: "#3a1848" },
+  dis:   { bg: "#0e0e18", fg: "#44445a", border: "#181826" }, // disabled
 };
 
-function Key({ label, onClick, kind = "num" }) {
+function Key({ label, onClick, kind = "num", wide = false, disabled = false, badge = null }) {
   const [pressed, setPressed] = useState(false);
-  const col = KEY_COLORS[kind] || KEY_COLORS.num;
+  const col = disabled ? C.dis : (C[kind] || C.num);
   return (
     <button
-      onClick={onClick}
-      onMouseDown={() => setPressed(true)}
+      onClick={disabled ? undefined : onClick}
+      onMouseDown={() => !disabled && setPressed(true)}
       onMouseUp={() => setPressed(false)}
       onMouseLeave={() => setPressed(false)}
-      onTouchStart={e => { e.preventDefault(); setPressed(true); }}
-      onTouchEnd={e => { e.preventDefault(); setPressed(false); onClick?.(); }}
+      onTouchStart={e => { if (disabled) return; e.preventDefault(); setPressed(true); }}
+      onTouchEnd={e => { if (disabled) return; e.preventDefault(); setPressed(false); onClick?.(); }}
       style={{
+        position: "relative",
         background: pressed ? col.bg + "bb" : col.bg,
         color: col.fg, border: `1px solid ${col.border}`,
-        borderRadius: "10px", height: "52px",
+        borderRadius: "9px", height: "48px",
+        gridColumn: wide ? "span 2" : undefined,
         fontFamily: "'JetBrains Mono', monospace",
-        fontSize: label.length > 3 ? "11px" : "14px",
-        cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
-        transform: pressed ? "scale(0.91)" : "scale(1)", transition: "transform 0.08s",
-        userSelect: "none", WebkitUserSelect: "none", outline: "none", letterSpacing: "0.5px",
-        boxShadow: pressed ? "inset 0 2px 8px rgba(0,0,0,0.7)" : "inset 0 1px 0 rgba(255,255,255,0.04), 0 3px 8px rgba(0,0,0,0.6)",
+        fontSize: label.length > 4 ? "10px" : label.length > 3 ? "11px" : "13px",
+        cursor: disabled ? "default" : "pointer",
+        display: "flex", alignItems: "center", justifyContent: "center",
+        transform: pressed ? "scale(0.90)" : "scale(1)",
+        transition: "transform 0.07s, background 0.07s",
+        userSelect: "none", WebkitUserSelect: "none", outline: "none",
+        letterSpacing: "0.4px", opacity: disabled ? 0.35 : 1,
+        boxShadow: pressed
+          ? "inset 0 2px 8px rgba(0,0,0,0.8)"
+          : `inset 0 1px 0 rgba(255,255,255,0.05), 0 3px 10px rgba(0,0,0,0.7)`,
       }}
     >
       {label}
+      {badge != null && (
+        <span style={{
+          position: "absolute", top: 3, right: 4,
+          fontSize: "8px", color: C.fn.fg, opacity: 0.8, lineHeight: 1,
+        }}>{badge}</span>
+      )}
     </button>
   );
 }
 
+// ══════════════════════════════════════════════════════════════════════════════
+// BUTTON LAYOUTS PER MODE
+// ══════════════════════════════════════════════════════════════════════════════
+
+function getButtons(mode, { push, doClear, doDel, doEval, doAns, doNeg, doMC, doMR, doMPlus, doMMinus, doMemStore, doProg, base, parenDepth, degMode }) {
+  if (mode === "std") return [
+    { l:"MC",  kind:"mem", fn:doMC    }, { l:"MR",  kind:"mem", fn:doMR    },
+    { l:"M+",  kind:"mem", fn:doMPlus }, { l:"M−",  kind:"mem", fn:doMMinus },
+    { l:"C",   kind:"clear",fn:doClear}, { l:"(",   kind:"fn",  fn:()=>push("(") },
+    { l:")",   kind:"fn",  fn:()=>push(")"), badge: parenDepth > 0 ? parenDepth : null },
+    { l:"⌫",   kind:"del", fn:doDel   },
+    { l:"7",   kind:"num", fn:()=>push("7") }, { l:"8", kind:"num", fn:()=>push("8") },
+    { l:"9",   kind:"num", fn:()=>push("9") }, { l:"÷", kind:"op",  fn:()=>push("/") },
+    { l:"4",   kind:"num", fn:()=>push("4") }, { l:"5", kind:"num", fn:()=>push("5") },
+    { l:"6",   kind:"num", fn:()=>push("6") }, { l:"×", kind:"op",  fn:()=>push("*") },
+    { l:"1",   kind:"num", fn:()=>push("1") }, { l:"2", kind:"num", fn:()=>push("2") },
+    { l:"3",   kind:"num", fn:()=>push("3") }, { l:"−", kind:"op",  fn:()=>push("-") },
+    { l:"+/−", kind:"fn",  fn:doNeg   }, { l:"0",   kind:"num", fn:()=>push("0") },
+    { l:".",   kind:"num", fn:()=>push(".") }, { l:"+", kind:"op",  fn:()=>push("+") },
+    { l:"ANS", kind:"ans", fn:doAns   }, { l:"%",   kind:"fn",  fn:()=>push("%") },
+    { l:"√",   kind:"fn",  fn:()=>push("sqrt(") }, { l:"=", kind:"eq", fn:doEval },
+  ];
+
+  if (mode === "sci") return [
+    { l:"sin",  kind:"fn",  fn:()=>push("sin(")  }, { l:"cos",  kind:"fn",  fn:()=>push("cos(")  },
+    { l:"tan",  kind:"fn",  fn:()=>push("tan(")  }, { l:"log",  kind:"fn",  fn:()=>push("log(")  },
+    { l:"ln",   kind:"fn",  fn:()=>push("ln(")   },
+    { l:"asin", kind:"fn",  fn:()=>push("asin(") }, { l:"acos", kind:"fn",  fn:()=>push("acos(") },
+    { l:"atan", kind:"fn",  fn:()=>push("atan(") }, { l:"10^x", kind:"fn",  fn:()=>push("10^(")  },
+    { l:"eˣ",  kind:"fn",  fn:()=>push("e^(")   },
+    { l:"sinh", kind:"fn",  fn:()=>push("sinh(") }, { l:"cosh", kind:"fn",  fn:()=>push("cosh(") },
+    { l:"tanh", kind:"fn",  fn:()=>push("tanh(") }, { l:"n!",   kind:"fn",  fn:()=>push("!")     },
+    { l:"abs",  kind:"fn",  fn:()=>push("abs(")  },
+    { l:"π",    kind:"ans", fn:()=>push("π")     }, { l:"e",    kind:"ans", fn:()=>push("e")     },
+    { l:"nCr",  kind:"fn",  fn:()=>push(",")     }, { l:"cbrt", kind:"fn",  fn:()=>push("cbrt(") },
+    { l:"√",    kind:"fn",  fn:()=>push("sqrt(") },
+    { l:"C",    kind:"clear",fn:doClear           }, { l:"(",    kind:"fn",  fn:()=>push("(")     },
+    { l:")",    kind:"fn",  fn:()=>push(")"), badge: parenDepth > 0 ? parenDepth : null },
+    { l:"xʸ",  kind:"fn",  fn:()=>push("^")     }, { l:"⌫",   kind:"del", fn:doDel             },
+    { l:"7",   kind:"num", fn:()=>push("7") }, { l:"8", kind:"num", fn:()=>push("8") },
+    { l:"9",   kind:"num", fn:()=>push("9") }, { l:"÷", kind:"op",  fn:()=>push("/") },
+    { l:"%",   kind:"fn",  fn:()=>push("%") },
+    { l:"4",   kind:"num", fn:()=>push("4") }, { l:"5", kind:"num", fn:()=>push("5") },
+    { l:"6",   kind:"num", fn:()=>push("6") }, { l:"×", kind:"op",  fn:()=>push("*") },
+    { l:"MR",  kind:"mem", fn:doMR },
+    { l:"1",   kind:"num", fn:()=>push("1") }, { l:"2", kind:"num", fn:()=>push("2") },
+    { l:"3",   kind:"num", fn:()=>push("3") }, { l:"−", kind:"op",  fn:()=>push("-") },
+    { l:"M+",  kind:"mem", fn:doMPlus },
+    { l:"+/−", kind:"fn",  fn:doNeg   }, { l:"0",  kind:"num", fn:()=>push("0") },
+    { l:".",   kind:"num", fn:()=>push(".") }, { l:"+", kind:"op",  fn:()=>push("+") },
+    { l:"ANS", kind:"ans", fn:doAns   },
+    { l:"MC",  kind:"mem", fn:doMC    }, { l:"M−",  kind:"mem", fn:doMMinus },
+    { l:"(",   kind:"fn",  fn:()=>push("(") }, { l:")",  kind:"fn",  fn:()=>push(")") },
+    { l:"=",   kind:"eq",  fn:doEval  },
+  ];
+
+  // prog mode
+  const hexDis = base === 10;
+  return [
+    { l:"C",   kind:"clear",fn:doClear          }, { l:"AND", kind:"fn",  fn:()=>doProg("&")   },
+    { l:"OR",  kind:"fn",   fn:()=>doProg("|")  }, { l:"⌫",  kind:"del", fn:doDel             },
+    { l:"A",   kind:"hex",  fn:()=>push("A"), disabled: hexDis },
+    { l:"B",   kind:"hex",  fn:()=>push("B"), disabled: hexDis },
+    { l:"XOR", kind:"fn",   fn:()=>doProg("^")  },
+    { l:"NOT", kind:"fn",   fn:()=>doProg("~")  },
+    { l:"7",   kind:"num",  fn:()=>push("7"), disabled: base===2 },
+    { l:"8",   kind:"num",  fn:()=>push("8"), disabled: base<=2  },
+    { l:"9",   kind:"num",  fn:()=>push("9"), disabled: base<=2  },
+    { l:"<<",  kind:"fn",   fn:()=>doProg("<<") },
+    { l:"C",   kind:"hex",  fn:()=>push("C"), disabled: hexDis },
+    { l:"D",   kind:"hex",  fn:()=>push("D"), disabled: hexDis },
+    { l:"4",   kind:"num",  fn:()=>push("4"), disabled: base===2 },
+    { l:"5",   kind:"num",  fn:()=>push("5"), disabled: base===2 },
+    { l:"6",   kind:"num",  fn:()=>push("6"), disabled: base===2 },
+    { l:">>",  kind:"fn",   fn:()=>doProg(">>") },
+    { l:"E",   kind:"hex",  fn:()=>push("E"), disabled: hexDis },
+    { l:"F",   kind:"hex",  fn:()=>push("F"), disabled: hexDis },
+    { l:"1",   kind:"num",  fn:()=>push("1") },
+    { l:"2",   kind:"num",  fn:()=>push("2"), disabled: base===2 },
+    { l:"3",   kind:"num",  fn:()=>push("3"), disabled: base===2 },
+    { l:"NOR", kind:"fn",   fn:()=>doProg("NOR") },
+    { l:"ANS", kind:"ans",  fn:doAns },
+    { l:"0",   kind:"num",  fn:()=>push("0") },
+    { l:"(",   kind:"fn",   fn:()=>push("(") },
+    { l:")",   kind:"fn",   fn:()=>push(")") },
+    { l:"=",   kind:"eq",   fn:doEval },
+  ];
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// REACT APP
+// ══════════════════════════════════════════════════════════════════════════════
+
 export default function App() {
-  const [expr, setExpr]         = useState("");
-  const [display, setDisplay]   = useState("0");
-  const [isResult, setIsResult] = useState(false);
-  const [ans, setAns]           = useState("0");
+  // ── terminal state
   const [cliOpen, setCliOpen]   = useState(false);
   const [lines, setLines]       = useState([]);
   const [inp, setInp]           = useState("");
@@ -373,13 +473,60 @@ export default function App() {
   const [savedFlash, setSavedFlash] = useState(false);
   const [cwd, setCwd]           = useState("/home/user");
 
+  // ── calculator core state
+  const [expr, setExpr]         = useState("");
+  const [display, setDisplay]   = useState("0");
+  const [isResult, setIsResult] = useState(false);
+  const [ans, setAns]           = useState("0");
+  const [preview, setPreview]   = useState(null);   // live eval preview
+  const [copied, setCopied]     = useState(false);  // clipboard flash
+
+  // ── calculator extended state
+  const [mode, setMode]         = useState("std");  // std | sci | prog
+  const [degMode, setDegMode]   = useState(false);
+  const [memory, setMemory]     = useState(null);   // null = empty
+  const [calcHist, setCalcHist] = useState([]);     // [{expr,result}]
+  const [histOpen, setHistOpen] = useState(false);  // history drawer
+  const [base, setBase]         = useState(10);     // prog mode base: 2|8|10|16
+
+  // ── refs
   const vfs    = useRef(new VFS());
   const sh     = useRef({ cwd: "/home/user", env: { HOME: "/home/user", USER: "user", PATH: "/bin:/usr/bin", SHELL: "/bin/mash", TERM: "xterm-256color", "?": "0" }, aliases: { ll: "ls -la", la: "ls -a", "..": "cd .." }, history: [] });
   const endRef = useRef(null);
   const inpRef = useRef(null);
   const metaTimer = useRef(null);
   const ansR   = useRef(ans);
+  const exprR  = useRef(expr);
+  const isResR = useRef(isResult);
+  const dispR  = useRef(display);
+  const memR   = useRef(memory);
+  ansR.current  = ans;
+  exprR.current = expr;
+  isResR.current = isResult;
+  dispR.current  = display;
+  memR.current   = memory;
 
+  // ── paren depth
+  const parenDepth = (() => {
+    let d = 0;
+    for (const c of expr) { if (c === "(") d++; else if (c === ")") d = Math.max(0, d - 1); }
+    return d;
+  })();
+
+  // ── live preview
+  useEffect(() => {
+    if (!expr || isResult) { setPreview(null); return; }
+    try {
+      const r = mathEval(expr, degMode);
+      if (isFinite(r) || r === Infinity || r === -Infinity) {
+        const s = fmtNum(r);
+        if (s !== expr) setPreview(s);
+        else setPreview(null);
+      } else setPreview(null);
+    } catch { setPreview(null); }
+  }, [expr, degMode, isResult]);
+
+  // ── IndexedDB
   const saveMeta = useCallback((ansOverride) => {
     clearTimeout(metaTimer.current);
     metaTimer.current = setTimeout(async () => {
@@ -400,71 +547,143 @@ export default function App() {
       vfs.current._db = db;
       return idbLoadAll(db);
     }).then(records => {
-        if (records && records.length > 0) {
-          const meta  = records.find(r => r.path === "__meta__");
-          const nodes = records.filter(r => r.path !== "__meta__");
-          if (nodes.length > 0) vfs.current.loadFromIDB(nodes);
-          if (meta) {
-            if (meta.cwd)     sh.current.cwd     = meta.cwd;
-            if (meta.env)     sh.current.env     = { ...sh.current.env, ...meta.env };
-            if (meta.aliases) sh.current.aliases = meta.aliases;
-            if (meta.history) sh.current.history = meta.history;
-            if (meta.ans)     { setAns(meta.ans); ansR.current = meta.ans; }
-            if (meta.cwd)     setCwd(meta.cwd);
-          }
-          const motd = vfs.current.read("/etc/motd") || "";
-          setLines([{ type: "sys", text: motd.replace(/\n$/,"") + (records.length>1||meta ? "\n[session restored from IndexedDB]" : "") }]);
-        } else {
-          setLines([{ type: "sys", text: (vfs.current.read("/etc/motd")||"").replace(/\n$/,"") }]);
+      if (records && records.length > 0) {
+        const meta  = records.find(r => r.path === "__meta__");
+        const nodes = records.filter(r => r.path !== "__meta__");
+        if (nodes.length > 0) vfs.current.loadFromIDB(nodes);
+        if (meta) {
+          if (meta.cwd)     sh.current.cwd     = meta.cwd;
+          if (meta.env)     sh.current.env     = { ...sh.current.env, ...meta.env };
+          if (meta.aliases) sh.current.aliases = meta.aliases;
+          if (meta.history) sh.current.history = meta.history;
+          if (meta.ans)     { setAns(meta.ans); ansR.current = meta.ans; }
+          if (meta.cwd)     setCwd(meta.cwd);
         }
+        const motd = vfs.current.read("/etc/motd") || "";
+        setLines([{ type:"sys", text: motd.replace(/\n$/,"") + (records.length>1||meta ? "\n[session restored from IndexedDB]" : "") }]);
+      } else {
+        setLines([{ type:"sys", text: (vfs.current.read("/etc/motd")||"").replace(/\n$/,"") }]);
+      }
     }).catch(() => {
-      setLines([{ type: "sys", text: (vfs.current.read("/etc/motd")||"").replace(/\n$/,"") }]);
+      setLines([{ type:"sys", text: (vfs.current.read("/etc/motd")||"").replace(/\n$/,"") }]);
     });
   }, []);
 
-  useEffect(() => { endRef.current?.scrollIntoView({ behavior: "smooth" }); }, [lines]);
+  useEffect(() => { endRef.current?.scrollIntoView({ behavior:"smooth" }); }, [lines]);
   useEffect(() => { if (cliOpen) setTimeout(() => inpRef.current?.focus(), 350); }, [cliOpen]);
 
-  const exprR  = useRef(expr);    exprR.current  = expr;
-  const isResR = useRef(isResult); isResR.current = isResult;
-  const dispR  = useRef(display); dispR.current  = display;
-  ansR.current = ans;
+  // ── programmer mode: convert display to target base
+  const parseProgNum = (s) => {
+    try {
+      if (base === 16) return parseInt(s.replace(/[^0-9a-fA-F]/g,""), 16);
+      if (base === 8)  return parseInt(s.replace(/[^0-7]/g,""), 8);
+      if (base === 2)  return parseInt(s.replace(/[^01]/g,""), 2);
+      return parseInt(s.replace(/[^0-9]/g,""), 10);
+    } catch { return 0; }
+  };
+  const fmtBase = (n, b) => {
+    if (!Number.isInteger(n) || isNaN(n)) return "—";
+    if (b === 2)  return n.toString(2).toUpperCase();
+    if (b === 8)  return n.toString(8).toUpperCase();
+    if (b === 16) return n.toString(16).toUpperCase();
+    return String(n);
+  };
 
+  // ── calculator actions
   const push = useCallback(v => {
     const isOp = /^[+\-*\/^%]$/.test(v);
-    if (isResR.current) { const next = isOp ? dispR.current + v : v; setExpr(next); setDisplay(next); setIsResult(false); }
-    else setExpr(e => { const n = e + v; setDisplay(n); return n; });
+    if (isResR.current) {
+      const next = isOp ? dispR.current + v : v;
+      setExpr(next); setDisplay(next); setIsResult(false);
+    } else {
+      setExpr(e => { const n = e + v; setDisplay(n); return n; });
+    }
   }, []);
 
-  const doClear = useCallback(() => { setExpr(""); setDisplay("0"); setIsResult(false); }, []);
-  const doDel   = useCallback(() => {
+  const doClear  = useCallback(() => { setExpr(""); setDisplay("0"); setIsResult(false); setPreview(null); }, []);
+  const doDel    = useCallback(() => {
     if (isResR.current) { setExpr(""); setDisplay("0"); setIsResult(false); return; }
-    setExpr(e => { const n = e.slice(0, -1); setDisplay(n || "0"); return n; });
+    setExpr(e => { const n = e.slice(0,-1); setDisplay(n||"0"); return n; });
   }, []);
-  const doAns = useCallback(() => {
+  const doAns    = useCallback(() => {
     const a = ansR.current;
     if (isResR.current) { setExpr(a); setDisplay(a); setIsResult(false); }
     else setExpr(e => { const n = e + a; setDisplay(n); return n; });
   }, []);
-  const doEval = useCallback(() => {
-    const e = exprR.current; if (!e) return;
+  const doNeg    = useCallback(() => {
+    const cur = exprR.current || dispR.current;
+    if (!cur || cur === "0") return;
+    const toggled = cur.startsWith("-") ? cur.slice(1) : "-" + cur;
+    setExpr(toggled); setDisplay(toggled); setIsResult(false);
+  }, []);
+
+  const doMC     = useCallback(() => setMemory(null), []);
+  const doMR     = useCallback(() => {
+    const m = memR.current;
+    if (m === null) return;
+    const ms = String(m);
+    if (isResR.current) { setExpr(ms); setDisplay(ms); setIsResult(false); }
+    else setExpr(e => { const n = e + ms; setDisplay(n); return n; });
+  }, []);
+  const doMPlus  = useCallback(() => {
     try {
-      const r = mathEval(e); const s = fmtNum(r);
+      const cur = parseFloat(exprR.current || dispR.current);
+      if (!isNaN(cur)) setMemory(m => (m === null ? cur : m + cur));
+    } catch {}
+  }, []);
+  const doMMinus = useCallback(() => {
+    try {
+      const cur = parseFloat(exprR.current || dispR.current);
+      if (!isNaN(cur)) setMemory(m => (m === null ? -cur : m - cur));
+    } catch {}
+  }, []);
+
+  const doProg   = useCallback((op) => {
+    if (op === "~") {
+      try {
+        const n = parseProgNum(exprR.current || dispR.current);
+        const r = String(~n);
+        setExpr(r); setDisplay(r); setIsResult(true);
+      } catch {}
+    } else if (op === "NOR") {
+      push("NOR");
+    } else {
+      push(op);
+    }
+  }, [base, push]);
+
+  const doEval   = useCallback(() => {
+    let e = exprR.current; if (!e) return;
+    try {
+      let val;
+      if (mode === "prog") {
+        // evaluate with bitwise understanding
+        e = e.replace(/NOR/g, " NOR ");
+        // simple bitwise eval
+        val = Function(`"use strict"; return (${e.replace(/NOR/g, "BITNOR")})`)();
+        if (typeof val !== "number") throw new Error("not a number");
+        val = Math.trunc(val);
+      } else {
+        val = mathEval(e, degMode);
+      }
+      const s = fmtNum(val);
       setAns(s); ansR.current = s;
       const existing = vfs.current.read("/home/user/ANS") || "";
       vfs.current.write("/home/user/ANS", existing + s + "\n");
-      setDisplay(s); setExpr(s); setIsResult(true);
+      setCalcHist(h => [{ expr: e, result: s }, ...h].slice(0, 50));
+      setDisplay(s); setExpr(s); setIsResult(true); setPreview(null);
       saveMeta(s);
-    } catch { setDisplay("Error"); setExpr(""); setIsResult(true); }
-  }, [saveMeta]);
+    } catch { setDisplay("Error"); setExpr(""); setIsResult(true); setPreview(null); }
+  }, [degMode, mode, saveMeta]);
 
+  // ── keyboard handler
   useEffect(() => {
     const h = e => {
       if (cliOpen && document.activeElement === inpRef.current) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const k = e.key;
       if (k >= "0" && k <= "9") push(k);
-      else if (["+", "-", "*", "/", "(", ")", "."].includes(k)) push(k);
+      else if (["+","-","*","/","(",")","."].includes(k)) push(k);
       else if (k === "^") push("^");
       else if (k === "Enter" || k === "=") doEval();
       else if (k === "Backspace") doDel();
@@ -474,15 +693,16 @@ export default function App() {
     return () => window.removeEventListener("keydown", h);
   }, [cliOpen, push, doEval, doDel, doClear]);
 
+  // ── terminal submit
   const submit = () => {
     const raw = inp.trim(); if (!raw) return;
     setCmdHist(h => [raw, ...h]); setCmdIdx(-1);
     const promptDisplay = sh.current.cwd === "/home/user" ? "~" : sh.current.cwd;
-    const newLines = [{ type: "in", text: `${promptDisplay} ❯ ${raw}` }];
+    const newLines = [{ type:"in", text:`${promptDisplay} ❯ ${raw}` }];
     const results = executeInput(raw, vfs.current, sh.current);
     for (const res of results) {
       if (res.output === undefined || res.output === null) continue;
-      if (res.output.startsWith("__CLEAR__")) { setLines([{ type: "sys", text: "Terminal cleared." }]); setInp(""); return; }
+      if (res.output.startsWith("__CLEAR__")) { setLines([{ type:"sys", text:"Terminal cleared." }]); setInp(""); return; }
       if (res.output.startsWith("__WIPEFS__")) {
         (async () => {
           try {
@@ -492,15 +712,15 @@ export default function App() {
             }
           } catch(e) { console.warn("IDB wipe failed", e); }
           const freshVfs = new VFS(); freshVfs._db = vfs.current._db; vfs.current = freshVfs;
-          sh.current = { cwd: "/home/user", env: { HOME: "/home/user", USER: "user", PATH: "/bin:/usr/bin", SHELL: "/bin/mash", TERM: "xterm-256color", "?": "0" }, aliases: { ll: "ls -la", la: "ls -a" }, history: [] };
+          sh.current = { cwd:"/home/user", env:{ HOME:"/home/user", USER:"user", PATH:"/bin:/usr/bin", SHELL:"/bin/mash", TERM:"xterm-256color", "?":"0" }, aliases:{ ll:"ls -la", la:"ls -a" }, history:[] };
           setAns("0"); setCmdHist([]); setCwd("/home/user");
-          setLines([{ type: "sys", text: "Filesystem wiped. All persisted data cleared." }]); setInp("");
+          setLines([{ type:"sys", text:"Filesystem wiped. All persisted data cleared." }]); setInp("");
         })();
         return;
       }
-      if (res.output.startsWith("__EXIT__")) { const code=parseInt(res.output.slice(8)); newLines.push({ type: "out", text: `[Process exited with code ${code}]` }); break; }
+      if (res.output.startsWith("__EXIT__")) { const code=parseInt(res.output.slice(8)); newLines.push({ type:"out", text:`[Process exited with code ${code}]` }); break; }
       const text = res.output.replace(/\n$/, "");
-      if (text !== "") newLines.push({ type: "out", text });
+      if (text !== "") newLines.push({ type:"out", text });
     }
     setLines(l => [...l, ...newLines]); setInp("");
     setCwd(sh.current.cwd); saveMeta();
@@ -517,68 +737,193 @@ export default function App() {
       if (words.length === 1) {
         const match = [...BUILTINS].filter(b => b.startsWith(last));
         if (match.length === 1) setInp(match[0]);
-        else if (match.length > 1) setLines(l => [...l, { type: "out", text: match.join("  ") }]);
+        else if (match.length > 1) setLines(l => [...l, { type:"out", text:match.join("  ") }]);
       } else {
-        const dir   = last.includes("/") ? vfs.current.resolve(last.slice(0, last.lastIndexOf("/")+1), sh.current.cwd) : sh.current.cwd;
-        const base  = last.includes("/") ? last.split("/").pop() : last;
-        const entries = vfs.current.ls(dir).filter(e => e.startsWith(base));
+        const dir = last.includes("/") ? vfs.current.resolve(last.slice(0,last.lastIndexOf("/")+1), sh.current.cwd) : sh.current.cwd;
+        const base2 = last.includes("/") ? last.split("/").pop() : last;
+        const entries = vfs.current.ls(dir).filter(e => e.startsWith(base2));
         if (entries.length === 1) { words[words.length-1]=(last.includes("/")?last.slice(0,last.lastIndexOf("/")+1):"")+entries[0]; setInp(words.join(" ")); }
-        else if (entries.length > 1) setLines(l => [...l, { type: "out", text: entries.join("  ") }]);
+        else if (entries.length > 1) setLines(l => [...l, { type:"out", text:entries.join("  ") }]);
       }
     }
   };
 
+  // ── copy display on click
+  const copyDisplay = () => {
+    try { navigator.clipboard.writeText(display); } catch {}
+    setCopied(true); setTimeout(() => setCopied(false), 900);
+  };
+
+  // ── display sizing
   const dispLen = display.length;
-  const dispFS  = dispLen > 16 ? "14px" : dispLen > 12 ? "20px" : dispLen > 8 ? "26px" : "34px";
+  const dispFS  = dispLen > 16 ? "13px" : dispLen > 12 ? "19px" : dispLen > 8 ? "25px" : "32px";
   const promptStr = `${cwd === "/home/user" ? "~" : cwd} ❯ `;
 
-  const calcButtons = [
-    { l:"C",  kind:"clear", fn:doClear }, { l:"(",  kind:"fn",  fn:()=>push("(") },
-    { l:")",  kind:"fn",  fn:()=>push(")") }, { l:"⌫",  kind:"del", fn:doDel },
-    { l:"7",  kind:"num", fn:()=>push("7") }, { l:"8",  kind:"num", fn:()=>push("8") },
-    { l:"9",  kind:"num", fn:()=>push("9") }, { l:"÷",  kind:"op",  fn:()=>push("/") },
-    { l:"4",  kind:"num", fn:()=>push("4") }, { l:"5",  kind:"num", fn:()=>push("5") },
-    { l:"6",  kind:"num", fn:()=>push("6") }, { l:"×",  kind:"op",  fn:()=>push("*") },
-    { l:"1",  kind:"num", fn:()=>push("1") }, { l:"2",  kind:"num", fn:()=>push("2") },
-    { l:"3",  kind:"num", fn:()=>push("3") }, { l:"−",  kind:"op",  fn:()=>push("-") },
-    { l:"0",  kind:"num", fn:()=>push("0") }, { l:".",  kind:"num", fn:()=>push(".") },
-    { l:"xʸ", kind:"fn",  fn:()=>push("^") }, { l:"+",  kind:"op",  fn:()=>push("+") },
-    { l:"ANS",kind:"ans", fn:doAns }, { l:"%",  kind:"fn",  fn:()=>push("%") },
-    { l:"√",  kind:"fn",  fn:()=>push("sqrt(") }, { l:"=",  kind:"eq",  fn:doEval },
-  ];
+  // ── grid cols per mode
+  const cols     = mode === "sci" ? 5 : 4;
+  const calcW    = mode === "sci" ? 330 : 300;
+
+  // ── button config
+  const btns = getButtons(mode, {
+    push, doClear, doDel, doEval, doAns, doNeg,
+    doMC, doMR, doMPlus, doMMinus, doMemStore: doMPlus,
+    doProg, base, parenDepth, degMode,
+  });
+
+  // ── programmer base display
+  const progNum = mode === "prog" ? (() => {
+    try { return Math.trunc(mathEval(expr || "0", false)); } catch { return null; }
+  })() : null;
 
   return (
     <div style={{
-      minHeight:"100vh", background:"#060608",
-      backgroundImage:"repeating-linear-gradient(0deg,transparent,transparent 23px,rgba(255,255,255,0.012) 23px,rgba(255,255,255,0.012) 24px)",
+      minHeight:"100vh", background:"#09090e",
+      backgroundImage:"repeating-linear-gradient(0deg,transparent,transparent 23px,rgba(255,255,255,0.013) 23px,rgba(255,255,255,0.013) 24px)",
       display:"flex", alignItems:"center", justifyContent:"center",
       fontFamily:"'JetBrains Mono', monospace", overflow:"hidden",
     }}>
-      <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500&display=swap" rel="stylesheet" />
+      <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@300;400;500;600&display=swap" rel="stylesheet" />
 
-      {/* Calculator */}
-      <div style={{ width:"290px", transform:cliOpen?"translateY(-100vh)":"translateY(0)", transition:"transform 0.45s cubic-bezier(0.4,0,0.2,1)" }}>
-        <div style={{ background:"#030305", border:"1px solid #1a1a20", borderRadius:"14px 14px 0 0", padding:"18px 18px 12px", boxShadow:"inset 0 0 60px rgba(0,0,0,0.8)", position:"relative", overflow:"hidden" }}>
-          <div style={{ position:"absolute", inset:0, background:"repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.1) 2px,rgba(0,0,0,0.1) 4px)", pointerEvents:"none" }} />
-          <div style={{ color:"#28262e", fontSize:"10px", textAlign:"right", minHeight:"14px", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", marginBottom:"10px", letterSpacing:"0.8px", position:"relative" }}>{expr||"·"}</div>
-          <div style={{ fontSize:dispFS, fontWeight:"300", color:isResult?"#e8e0d8":"#3d3840", textAlign:"right", minHeight:"48px", display:"flex", alignItems:"center", justifyContent:"flex-end", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", letterSpacing:"-0.5px", position:"relative", textShadow:isResult?"0 0 40px rgba(232,224,216,0.1)":"none", transition:"color 0.12s" }}>{display}</div>
-          <div style={{ color:"#15253a", fontSize:"9px", marginTop:"8px", letterSpacing:"2px", position:"relative" }}>ANS <span style={{ color:"#1e3a50" }}>{ans}</span></div>
+      {/* ── CALCULATOR ── */}
+      <div style={{ width:`${calcW}px`, transform:cliOpen?"translateY(-100vh)":"translateY(0)", transition:"transform 0.45s cubic-bezier(0.4,0,0.2,1), width 0.3s ease" }}>
+
+        {/* ── MODE TABS ── */}
+        <div style={{ display:"flex", gap:"4px", marginBottom:"6px", padding:"0 2px" }}>
+          {["std","sci","prog"].map(m => (
+            <button key={m} onClick={() => setMode(m)} style={{
+              flex:1, padding:"6px 0", background: mode===m ? "#1c1c2c" : "transparent",
+              border:`1px solid ${mode===m ? "#32305c" : "#1e1e2a"}`,
+              color: mode===m ? "#c4beff" : "#383850", borderRadius:"8px",
+              fontFamily:"'JetBrains Mono', monospace", fontSize:"9px", letterSpacing:"2.5px",
+              cursor:"pointer", transition:"all 0.2s", textTransform:"uppercase",
+            }}>{m === "std" ? "STD" : m === "sci" ? "SCI" : "PROG"}</button>
+          ))}
         </div>
-        <div style={{ background:"#0a0a0c", border:"1px solid #1a1a20", borderTop:"none", borderRadius:"0 0 14px 14px", padding:"10px", display:"grid", gridTemplateColumns:"repeat(4,1fr)", gap:"6px", boxShadow:"0 40px 100px rgba(0,0,0,0.95)" }}>
-          {calcButtons.map((b,i) => <Key key={i} label={b.l} kind={b.kind} onClick={b.fn} />)}
+
+        {/* ── DISPLAY ── */}
+        <div style={{ background:"#07070d", border:"1px solid #1e1e28", borderRadius:"12px 12px 0 0", padding:"16px 18px 12px", boxShadow:"inset 0 0 60px rgba(0,0,0,0.8)", position:"relative", overflow:"hidden" }}>
+          <div style={{ position:"absolute", inset:0, background:"repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.08) 2px,rgba(0,0,0,0.08) 4px)", pointerEvents:"none" }} />
+
+          {/* top info row */}
+          <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center", marginBottom:"6px", position:"relative" }}>
+            <div style={{ display:"flex", gap:"8px", alignItems:"center" }}>
+              {memory !== null && (
+                <span style={{ fontSize:"9px", color:"#d896ff", letterSpacing:"1.5px", background:"#1c1032", border:"1px solid #341a56", borderRadius:"4px", padding:"1px 5px" }}>M:{fmtNum(memory)}</span>
+              )}
+              {mode === "sci" && (
+                <button onClick={() => setDegMode(d => !d)} style={{
+                  fontSize:"9px", color: degMode ? "#74f096" : "#383850",
+                  background: degMode ? "#0e2416" : "transparent",
+                  border:`1px solid ${degMode ? "#1e4a2c" : "#1e1e2a"}`,
+                  borderRadius:"4px", padding:"1px 6px", cursor:"pointer",
+                  fontFamily:"'JetBrains Mono', monospace", letterSpacing:"1px", transition:"all 0.2s",
+                }}>{degMode ? "DEG" : "RAD"}</button>
+              )}
+              {mode === "prog" && (
+                <div style={{ display:"flex", gap:"3px" }}>
+                  {[10,16,8,2].map(b => (
+                    <button key={b} onClick={() => setBase(b)} style={{
+                      fontSize:"8px", color: base===b ? "#74f096" : "#383850",
+                      background: base===b ? "#0e2416" : "transparent",
+                      border:`1px solid ${base===b ? "#1e4a2c" : "#1e1e2a"}`,
+                      borderRadius:"3px", padding:"1px 4px", cursor:"pointer",
+                      fontFamily:"'JetBrains Mono', monospace", letterSpacing:"0.5px",
+                    }}>{b===10?"DEC":b===16?"HEX":b===8?"OCT":"BIN"}</button>
+                  ))}
+                </div>
+              )}
+            </div>
+            <button onClick={() => setHistOpen(o => !o)} style={{
+              fontSize:"9px", color: histOpen ? "#7cdeff" : "#252540",
+              background:"transparent", border:"none", cursor:"pointer", padding:"2px 4px",
+              fontFamily:"'JetBrains Mono', monospace",
+            }} title="History">⏱ {calcHist.length > 0 ? calcHist.length : ""}</button>
+          </div>
+
+          {/* expression */}
+          <div style={{ color:"#2e2e50", fontSize:"10px", textAlign:"right", minHeight:"14px", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", letterSpacing:"0.6px", position:"relative", marginBottom:"2px" }}>{expr||"·"}</div>
+
+          {/* live preview */}
+          {preview && !isResult && (
+            <div style={{ color:"#323260", fontSize:"11px", textAlign:"right", minHeight:"14px", marginBottom:"2px", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", position:"relative", fontWeight:"300" }}>= {preview}</div>
+          )}
+
+          {/* main display */}
+          <div
+            onClick={copyDisplay}
+            title={copied ? "Copied!" : "Tap to copy"}
+            style={{ fontSize:dispFS, fontWeight:"300", color:copied?"#7cdeff":isResult?"#f4ece4":"#3a3a58", textAlign:"right", minHeight:"44px", display:"flex", alignItems:"center", justifyContent:"flex-end", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", letterSpacing:"-0.5px", position:"relative", cursor:"pointer", textShadow:isResult?"0 0 40px rgba(244,236,228,0.1)":"none", transition:"color 0.12s", userSelect:"none" }}
+          >{display}</div>
+
+          {/* programmer sub-display */}
+          {mode === "prog" && progNum !== null && (
+            <div style={{ marginTop:"8px", borderTop:"1px solid #1a1a28", paddingTop:"6px", position:"relative" }}>
+              {[[16,"HEX"],[8,"OCT"],[2,"BIN"]].filter(([b])=>b!==base).map(([b, label]) => (
+                <div key={b} style={{ display:"flex", justifyContent:"space-between", marginBottom:"2px" }}>
+                  <span style={{ fontSize:"8px", color:"#2a2a48", letterSpacing:"1.5px" }}>{label}</span>
+                  <span style={{ fontSize:"9px", color:"#4a4a70", fontWeight:"400", maxWidth:"220px", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap", textAlign:"right" }}>{fmtBase(progNum, b)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* ANS row */}
+          <div style={{ color:"#16264a", fontSize:"9px", marginTop:"8px", letterSpacing:"2px", position:"relative", display:"flex", justifyContent:"space-between" }}>
+            <span>ANS <span style={{ color:"#1e3c6a" }}>{ans}</span></span>
+            {copied && <span style={{ color:"#7cdeff", fontSize:"8px", animation:"fadeOut 0.9s ease" }}>COPIED</span>}
+          </div>
         </div>
+
+        {/* ── BUTTONS ── */}
+        <div style={{ background:"#0c0c12", border:"1px solid #1e1e28", borderTop:"none", borderRadius:"0 0 12px 12px", padding:"8px", display:"grid", gridTemplateColumns:`repeat(${cols}, 1fr)`, gap:"5px", boxShadow:"0 40px 100px rgba(0,0,0,0.95)" }}>
+          {btns.map((b, i) => (
+            <Key key={i} label={b.l} kind={b.kind || "num"} onClick={b.fn} wide={b.wide} disabled={b.disabled} badge={b.badge ?? undefined} />
+          ))}
+        </div>
+
+        {/* ── TERMINAL TOGGLE ── */}
         <button
           onClick={() => setCliOpen(o => !o)}
-          style={{ width:"100%", marginTop:"8px", padding:"9px", background:"transparent", border:`1px solid ${cliOpen?"#1a3a1a":"#141418"}`, color:cliOpen?"#22c55e":"#1e2820", fontSize:"9px", fontFamily:"'JetBrains Mono', monospace", cursor:"pointer", borderRadius:"10px", letterSpacing:"3.5px", transition:"all 0.2s" }}
+          style={{ width:"100%", marginTop:"6px", padding:"8px", background:"transparent", border:`1px solid ${cliOpen?"#1a3a1a":"#151520"}`, color:cliOpen?"#22c55e":"#1e2825", fontSize:"9px", fontFamily:"'JetBrains Mono', monospace", cursor:"pointer", borderRadius:"10px", letterSpacing:"3.5px", transition:"all 0.2s" }}
           onMouseEnter={e=>{e.currentTarget.style.borderColor="#22c55e";e.currentTarget.style.color="#4ade80";}}
-          onMouseLeave={e=>{e.currentTarget.style.borderColor=cliOpen?"#1a3a1a":"#141418";e.currentTarget.style.color=cliOpen?"#22c55e":"#1e2820";}}
+          onMouseLeave={e=>{e.currentTarget.style.borderColor=cliOpen?"#1a3a1a":"#151520";e.currentTarget.style.color=cliOpen?"#22c55e":"#1e2825";}}
         >{cliOpen?"▲  CLOSE TERMINAL":"▼  OPEN TERMINAL"}</button>
       </div>
 
-      {/* Terminal */}
-      <div style={{ position:"fixed", bottom:0, left:0, right:0, height:"100vh", background:"#020205", borderTop:"1px solid #0c180c", transform:cliOpen?"translateY(0)":"translateY(100%)", transition:"transform 0.45s cubic-bezier(0.4,0,0.2,1)", display:"flex", flexDirection:"column", fontFamily:"'JetBrains Mono', monospace", zIndex:10 }}>
-        <div onClick={()=>setCliOpen(false)} style={{ padding:"7px 16px", background:"#03030a", borderBottom:"1px solid #0a140a", display:"flex", alignItems:"center", gap:"8px", cursor:"pointer", userSelect:"none", flexShrink:0 }}
-          onMouseEnter={e=>e.currentTarget.style.background="#050510"} onMouseLeave={e=>e.currentTarget.style.background="#03030a"}>
+      {/* ── HISTORY DRAWER ── */}
+      {histOpen && (
+        <div style={{ position:"fixed", top:0, right:0, bottom:0, width:"260px", background:"#07070d", borderLeft:"1px solid #1a1a28", zIndex:20, display:"flex", flexDirection:"column", transform:cliOpen?"translateY(-100vh)":"none", transition:"transform 0.45s cubic-bezier(0.4,0,0.2,1)" }}>
+          <div style={{ padding:"14px 16px 10px", borderBottom:"1px solid #131320", display:"flex", justifyContent:"space-between", alignItems:"center", flexShrink:0 }}>
+            <span style={{ color:"#7cdeff", fontSize:"10px", letterSpacing:"2.5px" }}>HISTORY</span>
+            <button onClick={() => setHistOpen(false)} style={{ background:"none", border:"none", color:"#2a2a48", cursor:"pointer", fontSize:"14px", padding:"2px 6px", fontFamily:"monospace" }}>✕</button>
+          </div>
+          <div style={{ flex:1, overflow:"auto", padding:"8px" }}>
+            {calcHist.length === 0 && <div style={{ color:"#1e1e38", fontSize:"10px", textAlign:"center", marginTop:"40px", letterSpacing:"1px" }}>no history yet</div>}
+            {calcHist.map((h, i) => (
+              <div key={i} onClick={() => { setAns(h.result); ansR.current = h.result; setHistOpen(false); }}
+                style={{ padding:"8px 10px", marginBottom:"4px", borderRadius:"7px", border:"1px solid #181826", cursor:"pointer", transition:"border-color 0.15s" }}
+                onMouseEnter={e => e.currentTarget.style.borderColor="#282848"}
+                onMouseLeave={e => e.currentTarget.style.borderColor="#181826"}
+              >
+                <div style={{ color:"#2c2c50", fontSize:"9px", marginBottom:"2px", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{h.expr}</div>
+                <div style={{ color:"#a0a0d0", fontSize:"13px", fontWeight:"300", overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>{h.result}</div>
+              </div>
+            ))}
+          </div>
+          <div style={{ padding:"10px 12px", borderTop:"1px solid #131320", flexShrink:0 }}>
+            <button onClick={() => setCalcHist([])} style={{ width:"100%", padding:"6px", background:"transparent", border:"1px solid #1e1e28", color:"#2a2a48", fontSize:"9px", borderRadius:"6px", cursor:"pointer", fontFamily:"'JetBrains Mono', monospace", letterSpacing:"2px", transition:"all 0.2s" }}
+              onMouseEnter={e=>{e.currentTarget.style.borderColor="#401a1a";e.currentTarget.style.color="#ff8c8c";}}
+              onMouseLeave={e=>{e.currentTarget.style.borderColor="#1e1e28";e.currentTarget.style.color="#2a2a48";}}>
+              CLEAR HISTORY
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ── TERMINAL ── */}
+      <div style={{ position:"fixed", bottom:0, left:0, right:0, height:"100vh", background:"#050508", borderTop:"1px solid #0c180c", transform:cliOpen?"translateY(0)":"translateY(100%)", transition:"transform 0.45s cubic-bezier(0.4,0,0.2,1)", display:"flex", flexDirection:"column", fontFamily:"'JetBrains Mono', monospace", zIndex:10 }}>
+        <div onClick={()=>setCliOpen(false)} style={{ padding:"7px 16px", background:"#04040a", borderBottom:"1px solid #0c180c", display:"flex", alignItems:"center", gap:"8px", cursor:"pointer", userSelect:"none", flexShrink:0 }}
+          onMouseEnter={e=>e.currentTarget.style.background="#06060e"} onMouseLeave={e=>e.currentTarget.style.background="#04040a"}>
           <span style={{ width:9, height:9, borderRadius:"50%", background:"#3a1515", display:"inline-block" }} />
           <span style={{ width:9, height:9, borderRadius:"50%", background:"#3a3010", display:"inline-block" }} />
           <span style={{ width:9, height:9, borderRadius:"50%", background:"#10203a", display:"inline-block" }} />
@@ -589,7 +934,7 @@ export default function App() {
           {lines.map((l,i) => <div key={i} style={{ whiteSpace:"pre-wrap", wordBreak:"break-all", color:l.type==="in"?"#86efac":l.type==="sys"?"#1f4525":"#4ade80", marginBottom:"2px", fontSize:"12px" }}>{l.text}</div>)}
           <div ref={endRef} />
         </div>
-        <div style={{ padding:"8px 16px", borderTop:"1px solid #0a140a", background:"#03030a", display:"flex", alignItems:"center", gap:"8px", flexShrink:0 }}>
+        <div style={{ padding:"8px 16px", borderTop:"1px solid #0a140a", background:"#04040a", display:"flex", alignItems:"center", gap:"8px", flexShrink:0 }}>
           <span style={{ color:"#1a5020", fontSize:"12px", whiteSpace:"nowrap", flexShrink:0 }}>{promptStr}</span>
           <input ref={inpRef} value={inp} onChange={e=>setInp(e.target.value)} onKeyDown={onKey}
             spellCheck={false} autoComplete="off" autoCorrect="off" autoCapitalize="off"
