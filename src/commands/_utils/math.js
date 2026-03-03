@@ -50,6 +50,7 @@ export function mathEval(expr, degMode = false) {
     .replace(/\bpow\b/g, "Math.pow").replace(/\bnCr\b/g,  "nCr")
     .replace(/\bnPr\b/g, "nPr");
   p = p.replace(/(?<![a-zA-Z\d_])e(?![a-zA-Z\d_])/g, "(Math.E)");
+  p = p.replace(/(\d+(?:\.\d+)?)\s*%/g, "($1/100)");
   p = p.replace(/(\d+(?:\.\d+)?)\s*!/g, "factorial($1)");
   p = p.replace(/\^/g, "**");
   return new Function("factorial","nCr","nPr","_sin","_cos","_tan","_asin","_acos","_atan",

@@ -464,7 +464,7 @@ function Key({ label, onClick, kind = "num", wide = false, disabled = false, bad
 // BUTTON LAYOUTS PER MODE
 // ══════════════════════════════════════════════════════════════════════════════
 
-function getButtons(mode, { push, doClear, doDel, doEval, doAns, doNeg, doMC, doMR, doMPlus, doMMinus, doMemStore, doProg, base, parenDepth, degMode }) {
+function getButtons(mode, { push, doClear, doDel, doEval, doAns, doNeg, doMC, doMR, doMPlus, doMMinus, doMemStore, doProg, doNcr, doNpr, base, parenDepth, degMode }) {
   if (mode === "std") return [
     { l:"MC",  kind:"mem", fn:doMC    }, { l:"MR",  kind:"mem", fn:doMR    },
     { l:"M+",  kind:"mem", fn:doMPlus }, { l:"M−",  kind:"mem", fn:doMMinus },
@@ -488,14 +488,14 @@ function getButtons(mode, { push, doClear, doDel, doEval, doAns, doNeg, doMC, do
     { l:"tan",  kind:"fn",  fn:()=>push("tan(")  }, { l:"log",  kind:"fn",  fn:()=>push("log(")  },
     { l:"ln",   kind:"fn",  fn:()=>push("ln(")   },
     { l:"asin", kind:"fn",  fn:()=>push("asin(") }, { l:"acos", kind:"fn",  fn:()=>push("acos(") },
-    { l:"atan", kind:"fn",  fn:()=>push("atan(") }, { l:"10^x", kind:"fn",  fn:()=>push("10^(")  },
+    { l:"atan", kind:"fn",  fn:()=>push("atan(") }, { l:"10ˣ",  kind:"fn",  fn:()=>push("10^(")  },
     { l:"eˣ",  kind:"fn",  fn:()=>push("e^(")   },
     { l:"sinh", kind:"fn",  fn:()=>push("sinh(") }, { l:"cosh", kind:"fn",  fn:()=>push("cosh(") },
-    { l:"tanh", kind:"fn",  fn:()=>push("tanh(") }, { l:"n!",   kind:"fn",  fn:()=>push("!")     },
-    { l:"abs",  kind:"fn",  fn:()=>push("abs(")  },
+    { l:"log₂", kind:"fn",  fn:()=>push("log2(") }, { l:"n!",   kind:"fn",  fn:()=>push("!")     },
+    { l:"|x|",  kind:"fn",  fn:()=>push("abs(")  },
     { l:"π",    kind:"ans", fn:()=>push("π")     }, { l:"e",    kind:"ans", fn:()=>push("e")     },
-    { l:"nCr",  kind:"fn",  fn:()=>push(",")     }, { l:"cbrt", kind:"fn",  fn:()=>push("cbrt(") },
-    { l:"√",    kind:"fn",  fn:()=>push("sqrt(") },
+    { l:"nCr",  kind:"fn",  fn:doNcr             }, { l:"nPr",  kind:"fn",  fn:doNpr             },
+    { l:"∛",    kind:"fn",  fn:()=>push("cbrt(") },
     { l:"C",    kind:"clear",fn:doClear           }, { l:"(",    kind:"fn",  fn:()=>push("(")     },
     { l:")",    kind:"fn",  fn:()=>push(")"), badge: parenDepth > 0 ? parenDepth : null },
     { l:"xʸ",  kind:"fn",  fn:()=>push("^")     }, { l:"⌫",   kind:"del", fn:doDel             },
@@ -574,7 +574,7 @@ export default function App() {
 
   // ── calculator extended state
   const [mode, setMode]         = useState("std");  // std | sci | prog
-  const [degMode, setDegMode]   = useState(false);
+  const [degMode, setDegMode]   = useState(true);  // true=DEG, false=RAD
   const [memory, setMemory]     = useState(null);   // null = empty
   const [calcHist, setCalcHist] = useState([]);     // [{expr,result}]
   const [histOpen, setHistOpen] = useState(false);  // history drawer
@@ -729,6 +729,18 @@ export default function App() {
     } catch {}
   }, []);
 
+  const doNcr = useCallback(() => {
+    const cur = exprR.current;
+    if (cur && !isResR.current) { setExpr(`nCr(${cur},`); setDisplay(`nCr(${cur},`); }
+    else push("nCr(");
+  }, [push]);
+
+  const doNpr = useCallback(() => {
+    const cur = exprR.current;
+    if (cur && !isResR.current) { setExpr(`nPr(${cur},`); setDisplay(`nPr(${cur},`); }
+    else push("nPr(");
+  }, [push]);
+
   const doProg   = useCallback((op) => {
     if (op === "~") {
       try {
@@ -748,10 +760,9 @@ export default function App() {
     try {
       let val;
       if (mode === "prog") {
-        // evaluate with bitwise understanding
-        e = e.replace(/NOR/g, " NOR ");
-        // simple bitwise eval
-        val = Function(`"use strict"; return (${e.replace(/NOR/g, "BITNOR")})`)();
+        // Handle NOR (not native in JS)
+        e = e.replace(/(\d+)\s*NOR\s*(\d+)/g, "(~($1|$2))");
+        val = Function(`"use strict"; return (${e})`)();
         if (typeof val !== "number") throw new Error("not a number");
         val = Math.trunc(val);
       } else {
@@ -878,7 +889,7 @@ export default function App() {
   const btns = getButtons(mode, {
     push, doClear, doDel, doEval, doAns, doNeg,
     doMC, doMR, doMPlus, doMMinus, doMemStore: doMPlus,
-    doProg, base, parenDepth, degMode,
+    doProg, doNcr, doNpr, base, parenDepth, degMode,
   });
 
   // ── programmer base display
